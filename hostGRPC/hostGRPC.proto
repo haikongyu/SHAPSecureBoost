@@ -1,0 +1,42 @@
+syntax = "proto3";
+package hostGRPC;
+option go_package="./;hostGRPC";
+
+service hostService {
+  //添加商品
+  rpc calLeftGH(nodeInfo) returns (leftInfo);
+  //获取商品
+  rpc hostSave(hostSavingInfo) returns (splitInfo);
+  rpc findNextNode(nodeInfo) returns (nextNode);
+}
+
+message nodeInfo {
+  sint64 treeId = 1;
+  sint64 nodeId = 2;
+  repeated double G = 3 [packed=true];
+  repeated  double H = 4 [packed=true];
+  repeated sint64 samplesId = 5 [packed=true];
+}
+
+message leftInfo {
+  repeated sint64 splitId =1 [packed=true];
+  repeated double GL = 2 [packed=true];
+  repeated double HL = 3 [packed=true];
+}
+
+message hostSavingInfo{
+  sint64 treeId = 1;
+  sint64  nodeId = 2;
+  sint64 splitId = 3;
+//  repeated sint64 samplesId = 4 [packed=true];
+}
+
+message splitInfo{
+  sint64 featureId = 1;
+  repeated sint64 leftSamplesId = 2 [packed=true];
+  repeated  sint64 rightSamplesId = 3 [packed=true];
+}
+
+message nextNode{
+  repeated bool isLeft = 1 [packed=true];
+}
