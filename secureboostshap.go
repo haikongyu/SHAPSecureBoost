@@ -1,14 +1,14 @@
-package SHAPSecureBoost
+package SecureBoostSHAP
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/haikongyu/SHAPSecureBoost/hostGRPC"
+	"github.com/haikongyu/A/hostGRPC"
 	"math"
 )
 
-func CalLeftGH(ctx context.Context, client hostGRPC.HostServiceClient, treeId, nodeId int64, G, H []float64, samplesId []int64) ([]int64, []float64, []float64) {
+func CalLeftGH(ctx *context.Context, client hostGRPC.HostServiceClient, treeId, nodeId int64, G, H []float64, samplesId []int64) ([]int64, []float64, []float64) {
 	nodeInfo := &hostGRPC.NodeInfo{
 		TreeId:    treeId,
 		NodeId:    nodeId,
@@ -16,7 +16,7 @@ func CalLeftGH(ctx context.Context, client hostGRPC.HostServiceClient, treeId, n
 		H:         H,
 		SamplesId: samplesId,
 	}
-	leftInfo, err := client.CalLeftGH(ctx, nodeInfo)
+	leftInfo, err := client.CalLeftGH(*ctx, nodeInfo)
 	if err != nil {
 		//logger.Println("calLeftGH fail", err)
 		return nil, nil, nil
@@ -25,14 +25,14 @@ func CalLeftGH(ctx context.Context, client hostGRPC.HostServiceClient, treeId, n
 	return leftInfo.SplitId, leftInfo.GL, leftInfo.HL
 }
 
-func HostSave(ctx context.Context, client hostGRPC.HostServiceClient, treeId, nodeId, splitId int64) (int64, []int64, []int64) {
+func HostSave(ctx *context.Context, client hostGRPC.HostServiceClient, treeId, nodeId, splitId int64) (int64, []int64, []int64) {
 	hostSavingInfo := &hostGRPC.HostSavingInfo{
 		TreeId:  treeId,
 		NodeId:  nodeId,
 		SplitId: splitId,
 		//SamplesId: samplesId,
 	}
-	splitInfo, err := client.HostSave(ctx, hostSavingInfo)
+	splitInfo, err := client.HostSave(*ctx, hostSavingInfo)
 	if err != nil {
 		//logger.Println("hostSave fail", err)
 	}
@@ -40,13 +40,13 @@ func HostSave(ctx context.Context, client hostGRPC.HostServiceClient, treeId, no
 	return splitInfo.FeatureId, splitInfo.LeftSamplesId, splitInfo.RightSamplesId
 }
 
-func FindNextNode(ctx context.Context, client hostGRPC.HostServiceClient, treeId, nodeId int64, samplesId []int64) []bool {
+func FindNextNode(ctx *context.Context, client hostGRPC.HostServiceClient, treeId, nodeId int64, samplesId []int64) []bool {
 	nodeInfo := &hostGRPC.NodeInfo{
 		TreeId:    treeId,
 		NodeId:    nodeId,
 		SamplesId: samplesId,
 	}
-	nextNode, err := client.FindNextNode(ctx, nodeInfo)
+	nextNode, err := client.FindNextNode(*ctx, nodeInfo)
 	if err != nil {
 		//logger.Println("find next node fail", nextNode.IsLeft)
 	}
@@ -76,8 +76,8 @@ type Booster struct {
 	g             []float64
 	h             []float64
 	tree          map[[2]int64]Node
-	client        hostGRPC.HostServiceClient
-	ctx           context.Context
+	client        *hostGRPC.HostServiceClient
+	ctx           *context.Context
 	nHostFeatures int64
 	learningRate  float64
 }
@@ -100,7 +100,7 @@ func (booster *Booster) fit(X [][]float64, y []int64, score []float64) {
 	booster.growingTree(X, y, 0)
 }
 
-func (booster Booster) predict(X [][]float64) []float64 {
+func (booster *Booster) predict(X [][]float64) []float64 {
 	weight := make([]float64, len(X))
 	nodeLeftDict := map[int64][]bool{}
 	samplesId := make([]int64, len(X))
@@ -124,7 +124,7 @@ func (booster Booster) predict(X [][]float64) []float64 {
 				//批量查询减少通信次数和时间
 				nodeId := int64(int(math.Exp2(float64(node.depth)))) + node.nodeIndex - 1
 				if len(nodeLeftDict[nodeId]) == 0 {
-					nodeLeftDict[nodeId] = FindNextNode(booster.ctx, booster.client, booster.id, nodeId, samplesId)
+					nodeLeftDict[nodeId] = FindNextNode(booster.ctx, *booster.client, booster.id, nodeId, samplesId)
 				}
 				isLeft := nodeLeftDict[nodeId]
 				if isLeft[i] {
@@ -144,7 +144,7 @@ func (booster Booster) predict(X [][]float64) []float64 {
 	return weight
 }
 
-func (booster Booster) findBestSplit(X [][]float64, samplesId []int64, g, h []float64, depth, nodeIndex int64) (string, int64, float64, []int64, []int64) {
+func (booster *Booster) findBestSplit(X [][]float64, samplesId []int64, g, h []float64, depth, nodeIndex int64) (string, int64, float64, []int64, []int64) {
 	//tcp
 	gamma := booster.gamma
 	lambda := booster.lambda
@@ -201,7 +201,7 @@ func (booster Booster) findBestSplit(X [][]float64, samplesId []int64, g, h []fl
 	if bestGain <= 0 {
 		bestIndex = -1
 	}
-	hostIndex, hostGL, hostHL := CalLeftGH(booster.ctx, booster.client, booster.id, int64(int(math.Exp2(float64(depth))))+nodeIndex-1, g, h, samplesId)
+	hostIndex, hostGL, hostHL := CalLeftGH(booster.ctx, *booster.client, booster.id, int64(int(math.Exp2(float64(depth))))+nodeIndex-1, g, h, samplesId)
 	hostBestIndex := int64(-1)
 	hostBestGain := float64(0)
 	for idx := int64(0); idx < int64(len(hostIndex)); idx++ {
@@ -229,8 +229,8 @@ func (booster Booster) findBestSplit(X [][]float64, samplesId []int64, g, h []fl
 			return "guest", bestIndex, bestThreshold, leftSamplesId, rightSamplesId
 		}
 	} else {
-		featureId, leftSamplesId, rightSamplesId := HostSave(booster.ctx, booster.client, booster.id, int64(int(math.Exp2(float64(depth))))+nodeIndex-1, hostBestIndex)
-		return "host", featureId, 0.0, leftSamplesId, rightSamplesId
+		featureId, leftSamplesId, rightSamplesId := HostSave(booster.ctx, *booster.client, booster.id, int64(int(math.Exp2(float64(depth))))+nodeIndex-1, hostBestIndex)
+		return "host", featureId + int64(len(X[0])), 0.0, leftSamplesId, rightSamplesId
 	}
 }
 
@@ -319,7 +319,7 @@ func (booster *Booster) growingTree_(X [][]float64, y, samplesId []int64, g, h [
 	fmt.Println(booster.id, node.depth, node.nodeIndex, node.featureOwner, node.featureIndex, node.isLeaf)
 }
 
-func (booster Booster) TreeShapSubset(X [][]float64, sampleId int64, subsetIndex []int64, depth, nodeIndex int64) float64 {
+func (booster *Booster) TreeShapSubset(X [][]float64, sampleId int64, subsetIndex []int64, depth, nodeIndex int64) float64 {
 	XI := X[sampleId]
 	node := booster.tree[[2]int64{depth, nodeIndex}]
 	if node.isLeaf {
@@ -339,8 +339,8 @@ func (booster Booster) TreeShapSubset(X [][]float64, sampleId int64, subsetIndex
 			}
 		} else {
 			//此处为node.featureOwner==“host"
-			if subsetIndex[int64(len(XI))+node.featureIndex] == 1 {
-				ifLeft := FindNextNode(booster.ctx, booster.client, booster.id, int64(math.Exp2(float64(depth)))+nodeIndex-1, []int64{sampleId})[0]
+			if subsetIndex[node.featureIndex] == 1 {
+				ifLeft := FindNextNode(booster.ctx, *booster.client, booster.id, int64(math.Exp2(float64(depth)))+nodeIndex-1, []int64{sampleId})[0]
 				if ifLeft {
 					return booster.TreeShapSubset(X, sampleId, subsetIndex, depth+1, 2*nodeIndex)
 				} else {
@@ -412,7 +412,7 @@ func Subset(length, index int64) [][]int64 {
 	return res
 }
 
-func (booster Booster) TreeShap(X [][]float64) [][]float64 {
+func (booster *Booster) TreeShap(X [][]float64) [][]float64 {
 	length := int64(len(X[0])) + booster.nHostFeatures
 	SHAP := make([][]float64, len(X))
 	for i := range X {
@@ -439,6 +439,139 @@ func (booster Booster) TreeShap(X [][]float64) [][]float64 {
 	return SHAP
 }
 
+type PathOfUniqueFeature struct {
+	//treeshap 中的m
+	d int64
+	z float64
+	o float64
+	w float64
+}
+
+func (booster *Booster) Extend(uniquePath []PathOfUniqueFeature, pZero, pOne float64, pi int64) []PathOfUniqueFeature {
+	uniquePathLocal := make([]PathOfUniqueFeature, len(uniquePath))
+	copy(uniquePathLocal, uniquePath)
+	l := len(uniquePathLocal)
+	if l == 1 {
+		fmt.Println("extend Path local 1", uniquePathLocal[0])
+	}
+	if l == 0 {
+		uniquePathLocal = append(uniquePathLocal, PathOfUniqueFeature{
+			d: pi,
+			z: pZero,
+			o: pOne,
+			w: 1,
+		})
+	} else {
+		uniquePathLocal = append(uniquePathLocal, PathOfUniqueFeature{
+			d: pi,
+			z: pZero,
+			o: pOne,
+			w: 0,
+		})
+	}
+	for i := l - 1; i >= 0; i-- {
+		uniquePathLocal[i+1].w += pOne * uniquePathLocal[i].w * float64(i+1) / float64(l+1)
+		uniquePathLocal[i].w = pZero * uniquePathLocal[i].w * float64(l-i) / float64(l+1)
+	}
+	return uniquePathLocal
+}
+
+func (booster *Booster) Unwind(uniquePath []PathOfUniqueFeature, i int64) []PathOfUniqueFeature {
+	uniquePathLocal := make([]PathOfUniqueFeature, len(uniquePath))
+	copy(uniquePathLocal, uniquePath)
+	l := len(uniquePathLocal) - 1
+	n := uniquePathLocal[l].w
+	pOne, pZero := uniquePathLocal[i].o, uniquePathLocal[i].z
+	for j := l - 1; j >= 0; j-- {
+		if pOne != 0 {
+			t := uniquePathLocal[j].w
+			uniquePathLocal[j].w = n * float64(l+1) / float64(j+1)
+			n = t - uniquePathLocal[j].w*pZero*float64(l-j)/float64(l+1)
+		} else {
+			uniquePathLocal[j].w = uniquePathLocal[j].w * float64(l+1) / (pZero * float64(l-j))
+		}
+	}
+	for j := i; j < int64(l); j++ {
+		uniquePathLocal[j].d = uniquePathLocal[j+1].d
+		uniquePathLocal[j].z = uniquePathLocal[j+1].z
+		uniquePathLocal[j].o = uniquePathLocal[j+1].o
+	}
+	return uniquePathLocal[:l]
+}
+func (booster *Booster) UnwoundSum(uniquePath []PathOfUniqueFeature, i int64) float64 {
+	l := len(uniquePath) - 1
+	res := 0.0
+	if uniquePath[i].o != 0 {
+		n := uniquePath[l].w
+		for j := l - 1; j >= 0; j-- {
+			t := n / (float64(j + 1))
+			res += t
+			n = uniquePath[j].w - t*uniquePath[i].z*float64(l-j)
+		}
+	} else {
+		for j := l - 1; j >= 0; j-- {
+			res += uniquePath[j].w / (float64(l-j) * uniquePath[i].z)
+		}
+	}
+	return res * float64(l+1)
+}
+func (booster *Booster) Recurse(node Node, uniquePath []PathOfUniqueFeature, pZero, pOne float64, pi int64, x, phi []float64, sampleId int64) {
+	uniquePathLocal := make([]PathOfUniqueFeature, len(uniquePath))
+	copy(uniquePathLocal, uniquePath)
+	uniquePathLocal = booster.Extend(uniquePathLocal, pZero, pOne, pi)
+	fmt.Println("extend +1")
+	if node.isLeaf {
+		for i := 1; i < len(uniquePathLocal); i++ {
+			fmt.Println("phi +=")
+			fmt.Println(len(uniquePathLocal))
+			fmt.Println("unwound sum", booster.UnwoundSum(uniquePathLocal, int64(i)))
+			fmt.Println(uniquePathLocal[0], uniquePathLocal[1])
+			fmt.Println(booster.UnwoundSum(uniquePathLocal, int64(i)) * (uniquePathLocal[i].o - uniquePathLocal[i].z) * node.weight)
+			phi[uniquePathLocal[i].d] += booster.UnwoundSum(uniquePathLocal, int64(i)) * (uniquePathLocal[i].o - uniquePathLocal[i].z) * node.weight
+		}
+	} else {
+		hotChild, coldChild := Node{}, Node{}
+		if node.featureOwner == "guest" {
+			if x[node.featureIndex] <= node.featureThreshold {
+				hotChild, coldChild = booster.tree[[2]int64{node.depth + 1, 2 * node.nodeIndex}], booster.tree[[2]int64{node.depth + 1, 2*node.nodeIndex + 1}]
+			} else {
+				hotChild, coldChild = booster.tree[[2]int64{node.depth + 1, 2*node.nodeIndex + 1}], booster.tree[[2]int64{node.depth + 1, 2 * node.nodeIndex}]
+			}
+		} else {
+			isLeft := FindNextNode(booster.ctx, *booster.client, booster.id, int64(int(math.Exp2(float64(node.depth))))+node.nodeIndex-1, []int64{sampleId})
+			fmt.Println("isLeft", isLeft)
+			if isLeft[0] {
+				hotChild, coldChild = booster.tree[[2]int64{node.depth + 1, 2 * node.nodeIndex}], booster.tree[[2]int64{node.depth + 1, 2*node.nodeIndex + 1}]
+			} else {
+				hotChild, coldChild = booster.tree[[2]int64{node.depth + 1, 2*node.nodeIndex + 1}], booster.tree[[2]int64{node.depth + 1, 2 * node.nodeIndex}]
+			}
+		}
+		iZero, iOne := 1.0, 1.0
+		for i, v := range uniquePathLocal {
+			if v.d == node.featureIndex {
+				iZero, iOne = v.z, v.o
+				uniquePathLocal = booster.Unwind(uniquePathLocal, int64(i))
+			}
+			break
+		}
+		booster.Recurse(hotChild, uniquePathLocal, iZero*float64(len(hotChild.samplesId))/float64(len(node.samplesId)), iOne, node.featureIndex, x, phi, sampleId)
+		booster.Recurse(coldChild, uniquePathLocal, iZero*float64(len(coldChild.samplesId))/float64(len(node.samplesId)), 0, node.featureIndex, x, phi, sampleId)
+	}
+}
+
+func (booster *Booster) TreeShap2(X [][]float64) [][]float64 {
+	phi := make([][]float64, len(X))
+	for i := 0; i < len(phi); i++ {
+		phi[i] = make([]float64, int64(len(X[i]))+booster.nHostFeatures)
+		var uniquePath []PathOfUniqueFeature
+		booster.Recurse(booster.tree[[2]int64{0, 0}], uniquePath, 1, 1, -2, X[i], phi[i], int64(i))
+		for j := 0; j < len(phi[0]); j++ {
+			phi[i][j] = phi[i][j] * booster.learningRate
+		}
+	}
+	return phi
+}
+
 func factorial(a int64) int64 {
 	if a == 0 {
 		return 1
@@ -458,8 +591,8 @@ type Secureboost struct {
 	LearningRate  float64
 	Gamma         float64
 	Model         []Booster
-	Client        hostGRPC.HostServiceClient
-	Ctx           context.Context
+	Client        *hostGRPC.HostServiceClient
+	Ctx           *context.Context
 	NHostFeatures int64
 	SHAPPhi0      float64
 }
@@ -510,7 +643,7 @@ func (secureboost *Secureboost) Fit(X [][]float64, y []int64) {
 	secureboost.SHAPPhi0 = SHAPPhi0 / float64(len(score))
 }
 
-func (secureboost Secureboost) PredictProba(X [][]float64) []float64 {
+func (secureboost *Secureboost) PredictProba(X [][]float64) []float64 {
 	score := make([]float64, len(X))
 	for _, booster := range secureboost.Model {
 		boosterWeight := booster.predict(X)
@@ -525,7 +658,7 @@ func (secureboost Secureboost) PredictProba(X [][]float64) []float64 {
 	return proba
 }
 
-func (secureboost Secureboost) Predict(X [][]float64) []int {
+func (secureboost *Secureboost) Predict(X [][]float64) []int {
 	proba := secureboost.PredictProba(X)
 	y := make([]int, len(proba))
 	for i := 0; i < len(proba); i++ {
@@ -538,11 +671,32 @@ func (secureboost Secureboost) Predict(X [][]float64) []int {
 	return y
 }
 
-func (secureboost Secureboost) TreeSHAP(X [][]float64) [][]float64 {
+func (secureboost *Secureboost) TreeSHAP(X [][]float64) [][]float64 {
 	SHAP := make([][][]float64, secureboost.NBoosters)
 	length := int64(len(X[0])) + secureboost.NHostFeatures
 	for i := range SHAP {
 		SHAP[i] = secureboost.Model[i].TreeShap(X)
+	}
+	TreeSHAP := make([][]float64, len(X))
+	for i := range TreeSHAP {
+		lines := make([]float64, length)
+		for j := int64(0); j < length; j++ {
+			tmpSHAP := 0.0
+			for k := int64(0); k < secureboost.NBoosters; k++ {
+				tmpSHAP += SHAP[k][i][j]
+			}
+			lines[j] = tmpSHAP
+		}
+		TreeSHAP[i] = append(lines, secureboost.SHAPPhi0)
+	}
+	return TreeSHAP
+}
+
+func (secureboost *Secureboost) TreeSHAP2(X [][]float64) [][]float64 {
+	SHAP := make([][][]float64, secureboost.NBoosters)
+	length := int64(len(X[0])) + secureboost.NHostFeatures
+	for i := range SHAP {
+		SHAP[i] = secureboost.Model[i].TreeShap2(X)
 	}
 	TreeSHAP := make([][]float64, len(X))
 	for i := range TreeSHAP {
